@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Email Queue Service Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  EmailFromAddress:
+    Type: String
+    Default: noreply@yourcompany.com
+    Description: Email address to send emails from
+
+Resources:
+  # SQS Queue for email processing
+  EmailQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'email-queue-${Environment}'
+      VisibilityTimeoutSeconds: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EmailDeadLetterQueue.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: email-queue-service
+
+  # Dead Letter Queue for failed messages
+  EmailDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'email-queue-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: email-queue-service
+
+  # IAM Role for Lambda function
+  EmailProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'email-processor-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EmailProcessorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt EmailQueue.Arn
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt JobStatusTable.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Lambda function for processing emails
+  EmailProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'email-processor-${Environment}'
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt EmailProcessorRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Placeholder function - deploy actual code');
+            return { statusCode: 200 };
+          };
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          NODE_ENV: !Ref Environment
+          EMAIL_FROM_ADDRESS: !Ref EmailFromAddress
+          JOB_STATUS_TABLE: !Ref JobStatusTable
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: email-queue-service
+
+  # Event Source Mapping for SQS to Lambda
+  EmailQueueEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt EmailQueue.Arn
+      FunctionName: !Ref EmailProcessorFunction
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+
+  # DynamoDB table for job status tracking
+  JobStatusTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'email-job-status-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jobId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jobId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: email-queue-service
+
+  # CloudWatch Log Group for Lambda
+  EmailProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/email-processor-${Environment}'
+      RetentionInDays: 14
+
+  # IAM User for API service (to access SQS)
+  EmailQueueServiceUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub 'email-queue-service-${Environment}'
+      Policies:
+        - PolicyName: SQSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
+                Resource: 
+                  - !GetAtt EmailQueue.Arn
+                  - !GetAtt EmailDeadLetterQueue.Arn
+
+  # Access Key for API service
+  EmailQueueServiceAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref EmailQueueServiceUser
+
+Outputs:
+  QueueUrl:
+    Description: URL of the SQS queue
+    Value: !Ref EmailQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-QueueUrl'
+
+  DeadLetterQueueUrl:
+    Description: URL of the dead letter queue
+    Value: !Ref EmailDeadLetterQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-DLQUrl'
+
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt EmailProcessorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+
+  JobStatusTableName:
+    Description: Name of the DynamoDB table for job status
+    Value: !Ref JobStatusTable
+    Export:
+      Name: !Sub '${AWS::StackName}-JobStatusTable'
+
+  AccessKeyId:
+    Description: Access Key ID for the service user
+    Value: !Ref EmailQueueServiceAccessKey
+
+  SecretAccessKey:
+    Description: Secret Access Key for the service user
+    Value: !GetAtt EmailQueueServiceAccessKey.SecretAccessKey
+    NoEcho: true

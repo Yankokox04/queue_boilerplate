@@ -1,0 +1,16 @@
+{
+  "name": "email-processor-lambda",
+  "version": "1.0.0",
+  "description": "AWS Lambda function for processing email queue messages",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1490.0"
+  },
+  "keywords": [
+    "aws",
+    "lambda",
+    "email",
+    "sqs",
+    "ses"
+  ]
+}
