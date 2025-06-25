@@ -1,0 +1,2 @@
+{"environment":"development","level":"info","message":"Email Queue Service running on port 3000","service":"email-queue-service","timestamp":"2025-06-25T14:18:19.353Z"}
+{"environment":"development","level":"info","message":"Environment: undefined","service":"email-queue-service","timestamp":"2025-06-25T14:18:19.356Z"}
